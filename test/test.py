@@ -7,15 +7,6 @@ from cocotb.types import LogicArray
 EDGE_TIMEOUT_NS = 10_000_000  
 
 
-async def await_half_sclk(dut):
-    """Wait for half of the SCLK period (5 us = 50 system clock cycles at 10 MHz)."""
-    start_time = cocotb.utils.get_sim_time(units="ns")
-    while True:
-        await ClockCycles(dut.clk, 1)
-        if (start_time + 5000) <= cocotb.utils.get_sim_time(units="ns"):
-            break
-
-
 def ui_in_logicarray(ncs, bit, sclk):
     """Map UI inputs: [ui_in[7:3]=00000, ui_in[2]=nCS, ui_in[1]=COPI, ui_in[0]=SCLK]."""
     return LogicArray(f"00000{ncs}{bit}{sclk}")
@@ -23,22 +14,11 @@ def ui_in_logicarray(ncs, bit, sclk):
 
 async def send_spi_transaction(dut, r_w, address, data):
     """
-    Sends a 16-bit SPI Mode 0 Transaction (CPOL=0, CPHA=0):
-    - Bit [15]: Read/Write (1 = Write)
-    - Bits [14:8]: 7-bit Address
-    - Bits [7:0]: 8-bit Data
+    Sends a 16-bit SPI Mode 0 Transaction.
+    Pin transitions are aligned to the Falling Edge of the system clock 
+    to prevent setup/hold violations in Gate-Level CDC synchronizers.
     """
-    if isinstance(data, LogicArray):
-        data_int = int(data)
-    else:
-        data_int = data
-
-    if address < 0 or address > 127:
-        raise ValueError("Address must be 7-bit (0-127)")
-    if data_int < 0 or data_int > 255:
-        raise ValueError("Data must be 8-bit (0-255)")
-
-    # 16-bit frame construction
+    data_int = int(data) if isinstance(data, LogicArray) else data
     frame = (int(r_w) << 15) | ((address & 0x7F) << 8) | (data_int & 0xFF)
 
     # 1. Drive CS low with SCLK low (Idle state for Mode 0)
@@ -46,7 +26,9 @@ async def send_spi_transaction(dut, r_w, address, data):
     ncs = 0
     bit = 0
     dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
-    await ClockCycles(dut.clk, 20)  # Setup time for nCS synchronizer
+    
+    # Wait 20 cycles aligned to FALLING EDGES
+    await ClockCycles(dut.clk, 20, rising=False)  
 
     # 2. Transmit 16 Bits (MSB first)
     for i in range(16):
@@ -55,28 +37,28 @@ async def send_spi_transaction(dut, r_w, address, data):
         # Setup data bit while SCLK is LOW
         sclk = 0
         dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
-        await await_half_sclk(dut)
+        await ClockCycles(dut.clk, 50, rising=False)
 
         # Drive SCLK HIGH (DUT samples data on this rising edge)
         sclk = 1
         dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
-        await await_half_sclk(dut)
+        await ClockCycles(dut.clk, 50, rising=False)
 
     # 3. Return SCLK to idle LOW before de-asserting CS
     sclk = 0
     dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
-    await ClockCycles(dut.clk, 20)
+    await ClockCycles(dut.clk, 20, rising=False)
 
     # 4. End Transaction - Pull nCS HIGH
     ncs = 1
     dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
 
-    # 5. Allow CDC 2-FF synchronizers to detect nCS rising edge and commit transaction
-    await ClockCycles(dut.clk, 100)
+    # 5. Allow CDC 2-FF synchronizers to detect nCS rising edge safely
+    await ClockCycles(dut.clk, 100, rising=False)
 
 
 async def reset_dut(dut):
-    """Resets the DUT and drives Gate-Level power pins if enabled."""
+    """Resets the DUT safely aligned to falling edges."""
     dut._log.info("Resetting DUT")
 
     if hasattr(dut, "VPWR"):
@@ -86,11 +68,15 @@ async def reset_dut(dut):
 
     dut.ena.value = 1
     dut.uio_in.value = 0
+    
+    # Drive reset changes on the falling edge to prevent reset recovery/removal X-states
+    await ClockCycles(dut.clk, 1, rising=False)
     dut.ui_in.value = ui_in_logicarray(ncs=1, bit=0, sclk=0)
     dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 20)
+    
+    await ClockCycles(dut.clk, 20, rising=False)
     dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 20)
+    await ClockCycles(dut.clk, 20, rising=False)
 
 
 @cocotb.test()
@@ -108,11 +94,11 @@ async def test_pwm_freq(dut):
     await send_spi_transaction(dut, r_w=1, address=0x02, data=0xFF)
     await send_spi_transaction(dut, r_w=1, address=0x04, data=0x80)
 
-    # Measure period across two consecutive rising edges
-    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+    # Measure period across two consecutive rising edges on uo_out[0]
+    await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
     t_start = cocotb.utils.get_sim_time(units="ns")
 
-    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+    await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
     t_end = cocotb.utils.get_sim_time(units="ns")
 
     period_ns = t_end - t_start
@@ -146,26 +132,27 @@ async def test_pwm_duty(dut):
         dut._log.info(f"Testing Duty Cycle Reg 0x04 = 0x{data_val:02X} (~{expected_pct}%)")
         await send_spi_transaction(dut, r_w=1, address=0x04, data=data_val)
 
+        # Allow PWM generator logic time to grab the new register values
         await ClockCycles(dut.clk, 100)
 
         if data_val == 0x00:
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out_0.value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out_0.value}"
+                assert dut.uo_out[0].value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out[0].value}"
 
         elif data_val == 0xFF:
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out_0.value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out_0.value}"
+                assert dut.uo_out[0].value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out[0].value}"
 
         else:
-            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
             t_rise = cocotb.utils.get_sim_time(units="ns")
 
-            await with_timeout(FallingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(FallingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
             t_fall = cocotb.utils.get_sim_time(units="ns")
 
-            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
             t_next_rise = cocotb.utils.get_sim_time(units="ns")
 
             high_time = t_fall - t_rise
