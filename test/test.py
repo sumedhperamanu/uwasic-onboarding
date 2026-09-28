@@ -111,10 +111,10 @@ async def test_pwm_freq(dut):
     await send_spi_transaction(dut, r_w=1, address=0x04, data=0x80)
 
     # Measure period between two consecutive rising edges
-    await RisingEdge(dut.uo_out)
+    await RisingEdge(dut.uo_out_0)
     t_start = cocotb.utils.get_sim_time(units="ns")
 
-    await RisingEdge(dut.uo_out)
+    await RisingEdge(dut.uo_out_0)
     t_end = cocotb.utils.get_sim_time(units="ns")
 
     period_ns = t_end - t_start
@@ -169,13 +169,13 @@ async def test_pwm_duty(dut):
 
         else:
             # Measure high time and total period
-            await RisingEdge(dut.uo_out)
+            await RisingEdge(dut.uo_out_0)
             t_rise = cocotb.utils.get_sim_time(units="ns")
 
-            await FallingEdge(dut.uo_out)
+            await FallingEdge(dut.uo_out_0)
             t_fall = cocotb.utils.get_sim_time(units="ns")
 
-            await RisingEdge(dut.uo_out)
+            await RisingEdge(dut.uo_out_0)
             t_next_rise = cocotb.utils.get_sim_time(units="ns")
 
             high_time = t_fall - t_rise
