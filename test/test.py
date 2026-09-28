@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, WithTimeout
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, with_timeout
 from cocotb.types import LogicArray
 
 # Max timeout for waiting on an edge (10 ms is plenty for a 3 kHz signal with ~333 us period)
@@ -112,10 +112,10 @@ async def test_pwm_freq(dut):
     await send_spi_transaction(dut, r_w=1, address=0x04, data=0x80)
 
     # Measure period between two consecutive rising edges with timeouts
-    await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_start = cocotb.utils.get_sim_time(units="ns")
 
-    await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_end = cocotb.utils.get_sim_time(units="ns")
 
     period_ns = t_end - t_start
@@ -170,13 +170,13 @@ async def test_pwm_duty(dut):
 
         else:
             # Measure high time and total period with timeouts
-            await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_rise = cocotb.utils.get_sim_time(units="ns")
 
-            await WithTimeout(FallingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(FallingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_fall = cocotb.utils.get_sim_time(units="ns")
 
-            await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_next_rise = cocotb.utils.get_sim_time(units="ns")
 
             high_time = t_fall - t_rise
