@@ -1,13 +1,11 @@
-# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
-# SPDX-License-Identifier: Apache-2.0
-
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
-from cocotb.triggers import ClockCycles
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
-from cocotb.types import Logic
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, WithTimeout
 from cocotb.types import LogicArray
+
+# Max timeout for waiting on an edge (10 ms is plenty for a 3 kHz signal with ~333 us period)
+EDGE_TIMEOUT_NS = 10_000_000  
+
 
 async def await_half_sclk(dut):
     """Wait for half of the SCLK period (10 us)."""
@@ -24,12 +22,7 @@ def ui_in_logicarray(ncs, bit, sclk):
 
 
 async def send_spi_transaction(dut, r_w, address, data):
-    """
-    Send a 16-bit SPI transaction:
-    - 1 bit for Read/Write (1=Write, 0=Read)
-    - 7 bits for Address
-    - 8 bits for Data
-    """
+    """Send a 16-bit SPI transaction."""
     if isinstance(data, LogicArray):
         data_int = int(data)
     else:
@@ -75,15 +68,23 @@ async def send_spi_transaction(dut, r_w, address, data):
     bit = 0
     dut.ui_in.value = ui_in_logicarray(ncs, bit, sclk)
 
-    # Give DUT time for synchronization (2-3 FF stages) and transaction finalization
+    # Give DUT time for synchronization and transaction finalization
     await ClockCycles(dut.clk, 600)
     return ui_in_logicarray(ncs, bit, sclk)
 
 
 async def reset_dut(dut):
-    """Helper to initialize clocks and perform reset sequence."""
+    """Helper to initialize power, clocks, and perform reset sequence."""
     dut._log.info("Resetting DUT")
+
+    # Drive Gate-Level Power pins if present
+    if hasattr(dut, "VPWR"):
+        dut.VPWR.value = 1
+    if hasattr(dut, "VGND"):
+        dut.VGND.value = 0
+
     dut.ena.value = 1
+    dut.uio_in.value = 0
     dut.ui_in.value = ui_in_logicarray(ncs=1, bit=0, sclk=0)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
@@ -107,14 +108,14 @@ async def test_pwm_freq(dut):
     # 2. Enable PWM Mode on uo_out (Addr 0x02)
     await send_spi_transaction(dut, r_w=1, address=0x02, data=0xFF)
 
-    # 3. Set Duty Cycle to 50% (Addr 0x04) so SCLK toggles reliably
+    # 3. Set Duty Cycle to 50% (Addr 0x04)
     await send_spi_transaction(dut, r_w=1, address=0x04, data=0x80)
 
-    # Measure period between two consecutive rising edges
-    await RisingEdge(dut.uo_out_0)
+    # Measure period between two consecutive rising edges with timeouts
+    await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_start = cocotb.utils.get_sim_time(units="ns")
 
-    await RisingEdge(dut.uo_out_0)
+    await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_end = cocotb.utils.get_sim_time(units="ns")
 
     period_ns = t_end - t_start
@@ -156,26 +157,26 @@ async def test_pwm_duty(dut):
         await ClockCycles(dut.clk, 100)
 
         if data_val == 0x00:
-            # Check static low across 1 full PWM period (~3330 system clock cycles)
+            # Check static low on pin 0 across 1 full PWM period (~3330 system clock cycles)
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out.value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out.value}"
+                assert dut.uo_out_0.value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out_0.value}"
 
         elif data_val == 0xFF:
-            # Check static high across 1 full PWM period
+            # Check static high on pin 0 across 1 full PWM period
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out.value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out.value}"
+                assert dut.uo_out_0.value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out_0.value}"
 
         else:
-            # Measure high time and total period
-            await RisingEdge(dut.uo_out_0)
+            # Measure high time and total period with timeouts
+            await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_rise = cocotb.utils.get_sim_time(units="ns")
 
-            await FallingEdge(dut.uo_out_0)
+            await WithTimeout(FallingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_fall = cocotb.utils.get_sim_time(units="ns")
 
-            await RisingEdge(dut.uo_out_0)
+            await WithTimeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_next_rise = cocotb.utils.get_sim_time(units="ns")
 
             high_time = t_fall - t_rise
