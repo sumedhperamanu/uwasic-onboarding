@@ -94,11 +94,11 @@ async def test_pwm_freq(dut):
     await send_spi_transaction(dut, r_w=1, address=0x02, data=0xFF)
     await send_spi_transaction(dut, r_w=1, address=0x04, data=0x80)
 
-    # Measure period across two consecutive rising edges on uo_out[0]
-    await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
+    # Measure period across two consecutive rising edges on uo_out_0
+    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_start = cocotb.utils.get_sim_time(units="ns")
 
-    await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
+    await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
     t_end = cocotb.utils.get_sim_time(units="ns")
 
     period_ns = t_end - t_start
@@ -138,21 +138,21 @@ async def test_pwm_duty(dut):
         if data_val == 0x00:
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out[0].value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out[0].value}"
+                assert dut.uo_out_0.value == 0, f"Expected 0% output to stay LOW, got {dut.uo_out_0.value}"
 
         elif data_val == 0xFF:
             for _ in range(3500):
                 await ClockCycles(dut.clk, 1)
-                assert dut.uo_out[0].value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out[0].value}"
+                assert dut.uo_out_0.value == 1, f"Expected 100% output to stay HIGH, got {dut.uo_out_0.value}"
 
         else:
-            await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_rise = cocotb.utils.get_sim_time(units="ns")
 
-            await with_timeout(FallingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(FallingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_fall = cocotb.utils.get_sim_time(units="ns")
 
-            await with_timeout(RisingEdge(dut.uo_out[0]), EDGE_TIMEOUT_NS, "ns")
+            await with_timeout(RisingEdge(dut.uo_out_0), EDGE_TIMEOUT_NS, "ns")
             t_next_rise = cocotb.utils.get_sim_time(units="ns")
 
             high_time = t_fall - t_rise
